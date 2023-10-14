@@ -2,10 +2,8 @@ import {Browser, firefox, Page} from "playwright";
 import {TweetApiUtilsData, TwitterOpenApi, TwitterOpenApiClient} from "twitter-openapi-typescript";
 import {Tweet} from "twitter-openapi-typescript-generated";
 import * as fs from "fs";
-
-const email = '00boilers-gutsy@icloud.com';
-const password = 'password1234';
-const handle = '@ScroogeMcD1995';
+import yargs from 'yargs'
+import { hideBin } from 'yargs/helpers';
 
 type ScrapedTweet = {
     keyword: string;
@@ -200,8 +198,14 @@ function getStats(tweet: Tweet) {
     }
 }
 
+const {keyword, email, handle, password} = await yargs(hideBin(process.argv)).options({
+    keyword: {type: 'string', demandOption: true},
+    email: {type: 'string', demandOption: true},
+    handle: {type: 'string', demandOption: true},
+    password: {type: 'string', demandOption: true},
+}).parse();
 
-const keyword = 'Gaza';
+
 const harvester = await authenticate(email, handle, password);
 const res = await harvester.search(keyword);
 fs.writeFileSync(`${keyword}.json`, JSON.stringify(res, null, 2));

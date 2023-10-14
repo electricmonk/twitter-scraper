@@ -10,9 +10,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@types/yargs": "^17.0.28",
     "playwright": "^1.39.0",
     "ts-node": "^10.9.1",
     "twitter-openapi-typescript": "^0.0.16",
-    "typescript": "^5.2.2"
+    "typescript": "^5.2.2",
+    "yargs": "^17.7.2"
   }
 }
