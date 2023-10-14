@@ -1,5 +1,5 @@
 import {Browser, firefox, Page} from "playwright";
-import {TwitterOpenApi, TwitterOpenApiClient} from "twitter-openapi-typescript";
+import {TweetApiUtilsData, TwitterOpenApi, TwitterOpenApiClient} from "twitter-openapi-typescript";
 import {Tweet} from "twitter-openapi-typescript-generated";
 import * as fs from "fs";
 
@@ -7,42 +7,43 @@ const email = '00boilers-gutsy@icloud.com';
 const password = 'password1234';
 const handle = '@ScroogeMcD1995';
 
+type ScrapedTweet = {
+    keyword: string;
+    id: string;
+    text: string | undefined;
+    stats: ReturnType<typeof getStats>
+    favoriters: Array<string | undefined>,
+    retweeters: Array<string | undefined>,
+    quotes: Array<ScrapedTweet>
+}
+
 class TweetHarvester {
-    constructor(private browser: Browser, private client: TwitterOpenApiClient) {
+    constructor(private client: TwitterOpenApiClient) {
 
     }
 
     async search(keyword: string) {
-        const scrapedTweets: any[] = [];
+        const scrapedTweets: ScrapedTweet[] = [];
         let cursor: string | undefined = undefined;
         console.log("searching for", keyword);
         while (true) {
             try {
-                const response = await this.client.getTweetApi().getSearchTimeline({rawQuery: keyword, cursor});
+                const response = await this.client.getTweetApi().getSearchTimeline({
+                    rawQuery: keyword,
+                    cursor,
+                    product: "Top"
+                });
                 const results = Array.from(response.data.data.entries());
 
                 const rateLimitRemainining = response.header.rateLimitRemaining;
-                console.log("got response", "size:", results.length, "rateLimitRemaining", rateLimitRemainining);
+                console.log("search for", keyword, "got response size:", results.length, "rateLimitRemaining", rateLimitRemainining);
 
-                const tweets = await Promise.allSettled(results.map(async ([index, {tweet}]) => {
-                    const id = tweet.restId;
-                    const {favoriters, retweeters} = await this.expandTweet(id);
-
-                    // quotes are queried using searchTimeline
-
-                    return {
-                        keyword,
-                        index,
-                        id,
-                        text: tweet.legacy?.fullText,
-                        stats: getStats(tweet),
-                        favoriters,
-                        retweeters
-                    }
-                }));
+                const tweets = await Promise.allSettled(results.map(([_, t]) => this.scrapeTweet(t)));
                 tweets.forEach(t => {
                     if (t.status === 'fulfilled') {
                         scrapedTweets.push(t.value);
+                    } else {
+                        console.error(t.reason);
                     }
                 });
 
@@ -79,26 +80,49 @@ class TweetHarvester {
     }
 
 
-    private async expandTweet(id: string) {
-        console.log("getting favoriters for tweet", id);
-        const favoritersResponse = await this.client.getUserListApi().getFavoriters({tweetId: id, count: 1000});
-        const favoriters = Array.from(favoritersResponse.data.data.entries()).map(([index, {user}]) => {
-            return user?.restId
-        });
-        console.log("got", favoriters.length, "favoriters");
+    private async scrapeTweet({tweet}: TweetApiUtilsData): Promise<ScrapedTweet> {
+        const id = tweet.restId;
+        const [
+            favoriters,
+            retweeters,
+            quotes
+        ] = await Promise.all([
+            this.getFavoriters(id),
+            this.getRetweeters(id),
+            this.search(`quoted_tweet_id:${id}`),
+        ]);
 
+        // quotes are queried using searchTimeline
+
+        return {
+            keyword,
+            id,
+            text: tweet.legacy?.fullText,
+            stats: getStats(tweet),
+            favoriters,
+            retweeters,
+            quotes
+        }
+    };
+
+    private async getRetweeters(id: string) {
         console.log("getting retweeters for tweet", id);
         const retweetersResponse = await this.client.getUserListApi().getRetweeters({tweetId: id, count: 1000});
         const retweeters = Array.from(retweetersResponse.data.data.entries()).map(([index, {user}]) => {
             return user?.restId
         });
         console.log("got", retweeters.length, "retweeters");
-
-        return {favoriters, retweeters};
+        return retweeters;
     }
 
-    async dispose() {
-        await this.browser.close();
+    private async getFavoriters(id: string) {
+        console.log("getting favoriters for tweet", id);
+        const favoritersResponse = await this.client.getUserListApi().getFavoriters({tweetId: id, count: 1000});
+        const favoriters = Array.from(favoritersResponse.data.data.entries()).map(([index, {user}]) => {
+            return user?.restId
+        });
+        console.log("got", favoriters.length, "favoriters");
+        return favoriters;
     }
 }
 
@@ -123,10 +147,12 @@ async function authenticate(email: string, handle: string, password: string) {
         if (!ct0 || !authToken) {
             throw new Error("no cookies");
         }
+        await browser.close();
 
         const client = await getClient(ct0, authToken);
 
-        return new TweetHarvester(browser, client);
+
+        return new TweetHarvester(client);
 
     } catch (e) {
         await context.tracing.stop({path: 'trace.zip'});
@@ -179,4 +205,3 @@ const keyword = 'Gaza';
 const harvester = await authenticate(email, handle, password);
 const res = await harvester.search(keyword);
 fs.writeFileSync(`${keyword}.json`, JSON.stringify(res, null, 2));
-await harvester.dispose();
